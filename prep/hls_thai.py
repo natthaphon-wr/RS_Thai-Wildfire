@@ -4,6 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import warnings
 from tqdm import tqdm
 from glob import glob
 
@@ -17,12 +18,13 @@ from terratorch.datamodules import GenericNonGeoSegmentationDataModule
 import albumentations as A 
 from albumentations.pytorch.transforms import ToTensorV2
 
+warnings.filterwarnings("ignore")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-def split_img(img_path, output_folder, new_size):
+def split_img(img_path, output_folder, new_size, forest_tiles):
     count = 0
     with rasterio.open(img_path) as src:
         meta = src.meta.copy()
@@ -33,30 +35,34 @@ def split_img(img_path, output_folder, new_size):
 
         for i in range(0, width-new_width, new_width):
             for j in range(0, height-new_height, new_height):
-                w = min(new_width, width - i)
-                h = min(new_height, height - j)
-                window = Window(i, j, w, h)
-
-                new_x, new_y = transform * (i, j)
-                new_transform = from_origin(new_x, new_y, transform.a, -transform.e)
-                meta.update({
-                    "width": w,
-                    "height": h,
-                    "transform": new_transform,
-                    "crs": crs
-                })
-
                 row_str = str(j).zfill(4)
                 col_str = str(i).zfill(4)
-                new_fname = os.path.splitext(os.path.basename(img_path))[0] + f"_{row_str}_{col_str}" + ".tif"
-                new_filepath = os.path.join(output_folder, new_fname)
-                new_img = src.read(window=window)
-                nan_ratio = np.isnan(new_img).sum()/(new_img.shape[1]*new_img.shape[2]*6)
-                nonzero_ratio = np.count_nonzero(new_img)/(new_img.shape[1]*new_img.shape[2]*6)
-                if nan_ratio <= 0.05 and nonzero_ratio >= 0.95:
-                    with rasterio.open(new_filepath, "w", **meta) as dst:
-                        dst.write(src.read(window=window))
-                    count += 1
+                fname = os.path.splitext(os.path.basename(img_path))[0]
+                small_patch = fname.split("_")[0] + f"_{row_str}_{col_str}"
+
+                if (forest_tiles==small_patch).any() :
+                    w = min(new_width, width - i)
+                    h = min(new_height, height - j)
+                    window = Window(i, j, w, h)
+
+                    new_x, new_y = transform * (i, j)
+                    new_transform = from_origin(new_x, new_y, transform.a, -transform.e)
+                    meta.update({
+                        "width": w,
+                        "height": h,
+                        "transform": new_transform,
+                        "crs": crs
+                    })
+    
+                    new_img = src.read(window=window)
+                    nan_ratio = np.isnan(new_img).sum()/(new_img.shape[1]*new_img.shape[2]*6)
+                    nonzero_ratio = np.count_nonzero(new_img)/(new_img.shape[1]*new_img.shape[2]*6)
+                    if nan_ratio <= 0.05 and nonzero_ratio >= 0.95:
+                        new_fname = small_patch + "_" + fname.split("_")[1] + ".tif"
+                        new_filepath = os.path.join(output_folder, new_fname)
+                        with rasterio.open(new_filepath, "w", **meta) as dst:
+                            dst.write(src.read(window=window))
+                        count += 1
             
     return count
 
@@ -70,8 +76,8 @@ def create_datamodule(data_path):
         HLSBands.SWIR_2,
     ]
     test_transform = A.Compose([ToTensorV2()])
-    means = [0.02, 0.04, 0.04, 0.09, 0.09, 0.06] # approx
-    stds = [0.08, 0.12, 0.13, 0.21, 0.23, 0.17] # approx
+    means = [0.02, 0.04, 0.03, 0.09, 0.08, 0.05] # approximate
+    stds = [0.06, 0.10, 0.10, 0.20, 0.20, 0.13] # approximate
 
     datamodule = GenericNonGeoSegmentationDataModule(
         batch_size = 8,
@@ -177,6 +183,14 @@ if __name__ == "__main__":
     # Read raw index
     index_raw = pd.read_csv(os.path.join(DATA_PATH_RAW, "index.csv"))
     logging.info(f"Index have {len(index_raw)} pairs")
+    forest_tiles = pd.read_csv(os.path.join(DATA_PATH_RAW, "forest_tiles.csv"))
+    forest_tiles["Row_str"] = forest_tiles["Row"].apply(lambda x: f"{x:04d}")
+    forest_tiles["Column_str"] = forest_tiles["Column"].apply(lambda x: f"{x:04d}")
+    forest_tiles["small_tile"] = "T" + forest_tiles["MGRS_Tile"] + "_" + \
+                                 forest_tiles["Row_str"] + "_" + forest_tiles["Column_str"]
+    logging.info(f"Number of small tiles that are forest: {len(forest_tiles)}")
+    logging.info("Example:")
+    logging.info(forest_tiles.head())
 
     # Split images
     img_size = (512, 512)
@@ -185,12 +199,12 @@ if __name__ == "__main__":
     pos_count = 0
     for fname in tqdm(pos_file_list, desc="Split positive"):
         file_path = os.path.join(DATA_PATH_RAW_POSITVE, fname)
-        pos_count += split_img(file_path, DATA_PATH_PREPROCESS_POSITIVE, img_size)
+        pos_count += split_img(file_path, DATA_PATH_PREPROCESS_POSITIVE, img_size, forest_tiles["small_tile"])
     logging.info(f"Completed split positve set from {len(pos_file_list)} to {pos_count}")
     neg_count = 0
     for fname in tqdm(neg_file_list, desc="Split negative"):
         file_path = os.path.join(DATA_PATH_RAW_NEGATIVE, fname)
-        neg_count += split_img(file_path, DATA_PATH_PREPROCESS_NEGATIVE, img_size)
+        neg_count += split_img(file_path, DATA_PATH_PREPROCESS_NEGATIVE, img_size, forest_tiles["small_tile"])
     logging.info(f"Completed split negative set from {len(neg_file_list)} to {neg_count}")
     
     # Filter out cloud
@@ -212,12 +226,17 @@ if __name__ == "__main__":
             row_str = str(j).zfill(4)
             col_str = str(i).zfill(4)
             suffix_list.append(f"_{row_str}_{col_str}")
+    
     index_preprocess = pd.DataFrame(
-        [(burn_id + suffix + ".tif", unburn_id + suffix + ".tif")
-        for burn_id, unburn_id in zip(index_raw['Burned ID'], index_raw['Unburned ID'])
+        [(burn_id.split("_")[0] + suffix + "_" + burn_id.split("_")[1] + ".tif", 
+            unburn_id.split("_")[0] + suffix + "_" + unburn_id.split("_")[1] + ".tif")
+        for burn_id, unburn_id in zip(index_raw['Burned_ID'], index_raw['Unburned_ID'])
         for suffix in suffix_list],
         columns=['positive', 'negative']
     )
+    logging.info("Example index for preped dataset:")
+    logging.info(index_preprocess.head())
+
     pos_files = glob(f"{DATA_PATH_PREPROCESS_POSITIVE}/*.tif")
     pos_files = [os.path.basename(path) for path in pos_files]
     neg_files = glob(f"{DATA_PATH_PREPROCESS_NEGATIVE}/*.tif")
