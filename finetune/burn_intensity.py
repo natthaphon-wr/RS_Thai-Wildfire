@@ -36,14 +36,13 @@ def create_datamodule(data_path):
         
         train_transform = [
             FlattenTemporalIntoChannels(),   # Required for temporal data
-            A.D4(),   # Random flips and rotation
+            A.D4(),  
             ToTensorV2(),
             UnflattenTemporalFromChannels(n_timesteps=3), # Required for temporal data
         ],
         val_transform = None,   # Using ToTensor() by default
-        test_transform = None,  # Using ToTensor() by default
-        
-        use_full_data = True,   # Use full data or less than 25 percent zeros
+        test_transform = None,  
+        use_full_data = True,
         no_label_replace = -1
     )
 
@@ -102,10 +101,10 @@ def create_model(decoder, loss, class_weights, bands):
         model_factory = "EncoderDecoderFactory",
         loss = loss,
         optimizer = "AdamW",
-        optimizer_hparams = {"weight_decay": 0.1}, # 0.01 -> 0.05 -> 0.1
+        optimizer_hparams = {"weight_decay": 0.1},
         lr = 1e-5,
-        scheduler = "StepLR", # ReduceLROnPlateau -> StepLR
-        scheduler_hparams = {"step_size": 3, "gamma": 0.9},  # {"factor": 0.5, "patience": 4} -> {"step_size": 3, "gamma": 0.9}
+        scheduler = "StepLR",
+        scheduler_hparams = {"step_size": 3, "gamma": 0.9},
         ignore_index = -1,
         freeze_backbone = True,
         freeze_decoder = False,

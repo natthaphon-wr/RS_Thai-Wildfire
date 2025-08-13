@@ -1,0 +1,31 @@
+seed_everything: 23
+
+path:
+  data_path: DATA_PATH
+  output_path: OUTPUT_PATH
+
+model:
+  loss: "dice"    
+  class_weights: [0.2, 0.8]  
+  decoder: "UNet" 
+
+data:
+  dataset_bands:
+  - BLUE
+  - GREEN
+  - RED
+  - NIR_NARROW
+  - SWIR_1
+  - SWIR_2
+  model_bands:
+  - BLUE
+  - GREEN
+  - RED
+  - NIR_NARROW
+  - SWIR_1
+  - SWIR_2
+  train_transform:
+  - class_path: D4
+  - class_path: ToTensorV2
+  test_transform:
+  - class_path: ToTensorV2

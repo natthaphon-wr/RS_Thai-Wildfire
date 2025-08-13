@@ -1,0 +1,10 @@
+seed_everything: 23
+
+path:
+  data_path: DATA_PATH
+  output_path: OUTPUT_PATH
+
+model:
+  loss: "ce"
+  class_weights: [0.05, 0.25, 0.15, 0.15, 0.40] 
+  decoder: "UperNet"
