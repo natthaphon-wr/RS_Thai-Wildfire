@@ -46,24 +46,24 @@ def build_transform(config):
 
     return  A.Compose(transform_list), class_path_list
 
-def create_datamodule(data_path, dataset_bands, model_bands, train_transform, test_transform):
+def create_datamodule(data_path, dataset_bands, model_bands, means, stds, train_transform, test_transform):
     # means, stds from https://github.com/NASA-IMPACT/hls-foundation-os/blob/main/configs/burn_scars.py
-    means = [
-        0.033349706741586264,
-        0.05701185520536176,
-        0.05889748132001316,
-        0.2323245113436119,
-        0.1972854853760658,
-        0.11944914225186566,
-    ]
-    stds = [
-        0.02269135568823774,
-        0.026807560223070237,
-        0.04004109844362779,
-        0.07791732423672691,
-        0.08708738838140137,
-        0.07241979477437814,
-    ]
+    # means = [
+    #     0.033349706741586264,
+    #     0.05701185520536176,
+    #     0.05889748132001316,
+    #     0.2323245113436119,
+    #     0.1972854853760658,
+    #     0.11944914225186566,
+    # ]
+    # stds = [
+    #     0.02269135568823774,
+    #     0.026807560223070237,
+    #     0.04004109844362779,
+    #     0.07791732423672691,
+    #     0.08708738838140137,
+    #     0.07241979477437814,
+    # ]
     
     datamodule = GenericNonGeoSegmentationDataModule(
         batch_size = 8,
@@ -218,6 +218,8 @@ if __name__ == "__main__":
     DECODER = config["model"]["decoder"]
     DATASET_BANDS = config["data"]["dataset_bands"]
     MODEL_BANDS = config["data"]["model_bands"]
+    MEANS = config["data"]["means"]
+    STDS = config["data"]["stds"]
     TRAIN_TRANSFORM = config["data"]["train_transform"]
     TEST_TRANSFORM = config["data"]["test_transform"]
 
@@ -238,6 +240,8 @@ if __name__ == "__main__":
     logging.info(f"Using decoder: {DECODER}")
     logging.info(f"Using class weights: {CLASS_WEIGHTS}")
     logging.info(f"Using bands: {MODEL_BANDS}")
+    logging.info(f"Using means: {MEANS}")
+    logging.info(f"Using stds: {STDS}")
     logging.info(f"Using train transform: {train_classpath_list}")
     logging.info(f"Using test transform: {test_classpath_list}")
 
@@ -257,7 +261,7 @@ if __name__ == "__main__":
 
     # Datamodule
     datamodule = create_datamodule(data_path=DATA_PATH, dataset_bands=DATASET_BANDS, model_bands=MODEL_BANDS,
-                                    train_transform=train_transform, test_transform=test_transform)
+                                   means=MEANS, stds=STDS, train_transform=train_transform, test_transform=test_transform)
     batch_size = datamodule.batch_size
     datamodule.setup("fit")
     datamodule.setup("test")

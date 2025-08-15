@@ -78,7 +78,6 @@ def create_datamodule(data_path):
     test_transform = A.Compose([ToTensorV2()])
     means = [0.02, 0.04, 0.03, 0.09, 0.08, 0.05] # approximate
     stds = [0.06, 0.10, 0.10, 0.20, 0.20, 0.13] # approximate
-
     datamodule = GenericNonGeoSegmentationDataModule(
         batch_size = 8,
         num_workers = 2,
@@ -101,7 +100,6 @@ def create_datamodule(data_path):
         no_label_replace = -1,
         rgb_indices = [2,1,0]
     )
-
     datamodule.setup("predict")
     datamodule_predict = datamodule.predict_dataset
     return datamodule_predict
@@ -125,35 +123,49 @@ def delete_surplus(file_list, new_index, data_path, desc):
             print(f"Not found: {filepath}")
         except Exception as e:
             print(f"Error deleting {filepath}: {e}")
-
     return pos_del
 
 def compute_mean_std_hls(folder_path, desc):
     image_paths = glob(os.path.join(folder_path, "*.tif"))
+
+    # Find percentiles
+    band_pixels = [[] for _ in range(6)]
+    for img_path in tqdm(image_paths, desc="Find percentiles"):
+        with rasterio.open(img_path) as src:
+            img = src.read() 
+            for band in range(img.shape[0]):
+                band_data = img[band]
+                valid_pixels = band_data[band_data > 0]
+                if valid_pixels.size > 0:
+                    band_pixels[band].append(valid_pixels)
+    p2 = np.zeros(6)
+    p98 = np.zeros(6)
+    for band in range(6):
+        all_vals = np.concatenate(band_pixels[band])
+        p2[band] = np.percentile(all_vals, 2)
+        p98[band] = np.percentile(all_vals, 98)
+
+    # Find stats
     sum_ = None
     sum_sq = None
     count = 0
-
     for img_path in tqdm(image_paths, desc=desc):
         with rasterio.open(img_path) as src:
             img = src.read() 
-            mask = img > 0
-            valid = img[mask]
-            if valid.size == 0:
-                continue  # skip if no valid pixels
             if sum_ is None:
                 sum_ = np.zeros(img.shape[0], dtype=np.float64)
                 sum_sq = np.zeros(img.shape[0], dtype=np.float64)
             for band in range(img.shape[0]):
                 band_data = img[band]
                 valid_pixels = band_data[band_data > 0]
-                sum_[band] += valid_pixels.sum()
-                sum_sq[band] += np.square(valid_pixels).sum()
-                count += len(valid_pixels)
+                valid_pixels = valid_pixels[(valid_pixels >= p2[band]) & (valid_pixels <= p98[band])]
+                if valid_pixels.size > 0:
+                    sum_[band] += valid_pixels.sum()
+                    sum_sq[band] += np.square(valid_pixels).sum()
+                    count += len(valid_pixels)
 
     mean = sum_ / count
     std = np.sqrt((sum_sq / count) - np.square(mean))
-
     return mean, std
 
 def combine_mean_std(mean_1, std_1, n_1, mean_2, std_2, n_2):
@@ -262,8 +274,8 @@ if __name__ == "__main__":
     # Find means and stds
     mean_pos, std_pos = compute_mean_std_hls(folder_path=DATA_PATH_PREPROCESS_POSITIVE, desc="Find stats for positive")
     mean_neg, std_neg = compute_mean_std_hls(folder_path=DATA_PATH_PREPROCESS_NEGATIVE, desc="Find stats for negative")
-    mean, std = combine_mean_std(mean_1=mean_pos, std_1=std_pos, n_1=len(index_preprocess_filter), 
-                                mean_2=mean_neg, std_2=std_neg, n_2=len(index_preprocess_filter))
+    mean, std = combine_mean_std(mean_1=mean_pos, std_1=std_pos, n_1=len(glob(os.path.join(DATA_PATH_PREPROCESS_POSITIVE, "*.tif"))),
+                                 mean_2=mean_neg, std_2=std_neg, n_2=len(glob(os.path.join(DATA_PATH_PREPROCESS_NEGATIVE, "*.tif"))))
     lines = [f"Means: {mean}", f"Stds: {std}"]
     with open(os.path.join(DATA_PATH_PREPROCESS, "stats.txt"), "w", encoding="utf-8") as f:
         for line in lines:
