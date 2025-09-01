@@ -178,7 +178,7 @@ def combine_mean_std(mean_1, std_1, n_1, mean_2, std_2, n_2):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="A basic Python script with arguments.")
+    parser = argparse.ArgumentParser(description="Arguments for preparation of HLS Thai data")
     parser.add_argument("--raw_data_path", type=str, help="Raw data directory")
     parser.add_argument("--prep_data_path", type=str, help="Preprocess data directory")
 

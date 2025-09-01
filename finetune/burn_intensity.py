@@ -8,7 +8,6 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
 from terratorch.datasets import HLSBands
 from terratorch.datamodules import BurnIntensityNonGeoDataModule
@@ -147,7 +146,7 @@ def create_trainer(checkpoint_path, log_path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="A basic Python script with arguments.")
+    parser = argparse.ArgumentParser(description="Arguments for training Burn Intensity")
     parser.add_argument("--config_path", type=str, help="YAML configuration")
 
     args = parser.parse_args()

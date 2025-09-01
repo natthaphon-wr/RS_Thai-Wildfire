@@ -1,16 +1,19 @@
 import argparse
 import logging
 import os
+import shutil
 import yaml
 import json
+import numpy as np
+import rasterio
 import warnings
 from datetime import datetime
+from tqdm import tqdm
+from glob import glob
 import matplotlib.pyplot as plt
 
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
-from terratorch.datasets import HLSBands
 from terratorch.datamodules import GenericNonGeoSegmentationDataModule
 from terratorch.tasks import SemanticSegmentationTask
 
@@ -28,20 +31,67 @@ logging.basicConfig(
 )
 
 def build_transform(config):
+    def load_rgb_from_tif(path):
+        with rasterio.open(path) as src:
+            img = src.read([3, 2, 1])  # select RGB bands
+            img = np.transpose(img, (1, 2, 0))  # HWC
+            img = np.nan_to_num(img, nan=0.0, posinf=0.0, neginf=0.0)
+        return img
+    
+    def get_ref_imgs(file_path_list):
+        ref_img_list = []
+        for path in tqdm(file_path_list, desc="Read reference imgs"):
+            ref_img = load_rgb_from_tif(path)
+            ref_img_list.append(ref_img)
+        return ref_img_list
+
     transform_list = []
     class_path_list = []
     for item in config:
         class_path = item["class_path"]
         class_path_list.append(class_path)
         init_args = item.get("init_args", {}) or {}
-        if hasattr(A, class_path):
-            transform_class = getattr(A, class_path)
-        elif class_path == "ToTensorV2":
-            transform_class = ToTensorV2
+        if class_path == "FDA":
+            reference_path = init_args.get("reference_path")
+            beta_limit = init_args.get("beta_limit")
+            p = init_args.get("p")
+            ref_files = glob(os.path.join(reference_path, "*.tif"))
+            ref_imgs = get_ref_imgs(ref_files)
+            transform = A.FDA(reference_images=ref_imgs,
+                              read_fn=lambda x: x,
+                              beta_limit=beta_limit,
+                              p=p)
+        elif class_path == "HistogramMatching":
+            reference_path = init_args.get("reference_path")
+            blend_ratio = init_args.get("blend_ratio")
+            p = init_args.get("p")
+            ref_files = glob(os.path.join(reference_path, "*.tif"))
+            ref_imgs = get_ref_imgs(ref_files)
+            transform = A.HistogramMatching(reference_images=ref_imgs,
+                                            read_fn=lambda x: x,
+                                            blend_ratio=blend_ratio,
+                                            p=p)
+        elif class_path == "PixelDistributionAdaptation":
+            reference_path = init_args.get("reference_path")
+            transform_type = init_args.get("transform_type")
+            blend_ratio = init_args.get("blend_ratio")
+            p = init_args.get("p")
+            ref_files = glob(os.path.join(reference_path, "*.tif"))
+            ref_imgs = get_ref_imgs(ref_files)
+            transform = A.PixelDistributionAdaptation(reference_images=ref_imgs,
+                                                      read_fn=lambda x: x,
+                                                      transform_type=transform_type,
+                                                      blend_ratio=blend_ratio,
+                                                      p=p)
         else:
-            raise ValueError(f"Transform '{class_path}' not found.")
+            if hasattr(A, class_path):
+                transform_class = getattr(A, class_path)
+            elif class_path == "ToTensorV2":
+                transform_class = ToTensorV2
+            else:
+                raise ValueError(f"Transform '{class_path}' not found.")
         
-        transform = transform_class(**init_args)
+            transform = transform_class(**init_args)
         transform_list.append(transform)
 
     return  A.Compose(transform_list), class_path_list
@@ -201,7 +251,7 @@ def create_trainer(checkpoint_path, log_path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="A basic Python script with arguments.")
+    parser = argparse.ArgumentParser(description="Arguments for training Burnscars")
     parser.add_argument("--config_path", type=str, help="YAML configuration")
 
     args = parser.parse_args()
@@ -257,6 +307,7 @@ if __name__ == "__main__":
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
     os.makedirs(PERFORMANCE_PATH, exist_ok=True)
     os.makedirs(PREDICTION_PATH, exist_ok=True)
+    shutil.copy(config_path, os.path.join(LOG_PATH, "config.yaml"))
     logging.info(f"Completed create output directory: {OUTPUT_PATH}")
 
     # Datamodule
