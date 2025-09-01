@@ -19,8 +19,6 @@ from matplotlib.patches import Rectangle
 
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets, transforms
 
 from terratorch.datasets import HLSBands
 from terratorch.datamodules import GenericNonGeoSegmentationDataModule
@@ -36,7 +34,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-def create_datamodule(data_path, batchsize, means, stds, use_rgb):
+def create_datamodule(data_path, batchsize, means, stds, rgb_only):
     hls_bands = [
         HLSBands.BLUE,
         HLSBands.GREEN,
@@ -46,7 +44,7 @@ def create_datamodule(data_path, batchsize, means, stds, use_rgb):
         HLSBands.SWIR_2,
     ]
     test_transform = A.Compose([ToTensorV2()])
-    model_bands = hls_bands[0:3] if use_rgb else hls_bands
+    model_bands = hls_bands[0:3] if rgb_only else hls_bands
     
     datamodule = GenericNonGeoSegmentationDataModule(
         batch_size = batchsize,
@@ -76,7 +74,7 @@ def create_datamodule(data_path, batchsize, means, stds, use_rgb):
 
     return datamodule, predict_set
 
-def plot_custom(sample: dict[str, Tensor], suptitle: str | None = None):
+def plot_msi(sample: dict[str, Tensor], suptitle: str | None = None):
     
     def select_img(image, color_indices):
         image = image.take(color_indices, axis=0)
@@ -253,7 +251,7 @@ def prediction(model, datamodule, output_path, visualized_sample, desc):
                     # save plot from visualized_samples
                     match_row = visualized_sample[visualized_sample==casename]
                     if not match_row.empty:
-                        fig = plot_custom(sample=sample)
+                        fig = plot_msi(sample=sample)
                         fig.savefig(os.path.join(plot_dir, f"{match_row.index[0]}_{casename}.png"))
                         del fig  
     
@@ -262,62 +260,6 @@ def prediction(model, datamodule, output_path, visualized_sample, desc):
                 del batch, images, outputs, preds
                 gc.collect()
                 torch.cuda.empty_cache()
-
-def analysis(res_pos, res_neg, total_pixels, output_path):
-    def create_boxplot(data_pos, data_neg, title):
-        fig, ax = plt.subplots()
-        ax.boxplot([data_pos, data_neg], labels=["Positive", "Negative"])
-        ax.set_ylabel("Burned Ratio")
-        ax.set_title(title)
-        plt.close(fig)
-        return fig
-
-    def compare_all(res_pos, res_neg, total_pixels):
-        res_pos["ratio_burned"] = res_pos["burned"] / total_pixels
-        res_neg["ratio_burned"] = res_neg["burned"] / total_pixels
-        fig = create_boxplot(data_pos=res_pos["ratio_burned"], 
-                            data_neg=res_neg["ratio_burned"], 
-                            title="All Region")
-        return fig, res_pos, res_neg
-    
-    def cloud_vs_clear(res_pos, res_neg, total_pixels):
-        res_pos["ratio_cloud"] = res_pos["cloud"] / total_pixels
-        res_pos["ratio_burned_on_clear"] = (res_pos["burned_clear"]/res_pos["clear"]).fillna(0)
-        res_pos["ratio_burned_on_cloud"] = (res_pos["burned_cloud"]/res_pos["cloud"]).fillna(0)
-        res_neg["ratio_cloud"] = res_neg["cloud"] / total_pixels
-        res_neg["ratio_burned_on_clear"] = (res_neg["burned_clear"]/res_neg["clear"]).fillna(0)
-        res_neg["ratio_burned_on_cloud"] = (res_neg["burned_cloud"]/res_neg["cloud"]).fillna(0)
-        fig_clear = create_boxplot(data_pos=res_pos["ratio_burned_on_clear"], 
-                                data_neg=res_neg["ratio_burned_on_clear"], 
-                                title="Clear Region")
-        fig_cloud = create_boxplot(data_pos=res_pos["ratio_burned_on_cloud"],
-                                data_neg=res_neg["ratio_burned_on_cloud"],
-                                title="Cloud Region")
-        return fig_clear, fig_cloud, res_pos, res_neg
-    
-    def corr_cloud_burned(res_pos, res_neg):
-        fig, ax = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(10, 4))
-        ax[0].scatter(x=res_pos["ratio_cloud"], y=res_pos["ratio_burned"])
-        ax[0].set_title("Positive")
-        ax[1].scatter(x=res_neg["ratio_cloud"], y=res_neg["ratio_burned"])
-        ax[1].set_title("Negative")
-        for ax in ax:
-            ax.set_xlabel("Cloud Ratio")
-            ax.set_ylabel("Burn Ratio")
-        plt.suptitle("Scatter plot between cloud ratio and burned ratio")
-        plt.tight_layout()
-        plt.close(fig)
-        return fig
-    
-    fig_all, res_pos, res_neg = compare_all(res_pos, res_neg, total_pixels)
-    fig_clear, fig_cloud, res_pos, res_neg = cloud_vs_clear(res_pos, res_neg, total_pixels)
-    fig_scatter = corr_cloud_burned(res_pos, res_neg)
-    fig_all.savefig(os.path.join(output_path, "boxplot_all.png"))
-    fig_clear.savefig(os.path.join(output_path, "boxplot_clear.png"))
-    fig_cloud.savefig(os.path.join(output_path, "boxplot_cloud.png"))
-    fig_scatter.savefig(os.path.join(output_path, "scatter_corr.png"))
-
-    return res_pos, res_neg
 
 def sum_res(df):
     cols = ["ratio_burned", "ratio_cloud", "ratio_burned_on_clear", "ratio_burned_on_cloud"]
@@ -332,19 +274,19 @@ def sum_res(df):
     return summary_df
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="A basic Python script with arguments.")
+    parser = argparse.ArgumentParser(description="Arguments for HLS Thai prediction")
     parser.add_argument("--data_path", type=str, help="Data directory for prediction")
     parser.add_argument("--model_path", type=str, help="Model directory containing config and checkpoint")
     parser.add_argument("--output_path", type=str, help="Output directory")
     parser.add_argument("--n_sample", type=int, default=10, help="Number of pairs for visualization output")
-    parser.add_argument("--use_rgb", action="store_true", help="Flag to use only RGB")
+    parser.add_argument("--rgb_only", action="store_true", help="Flag to use only RGB")
 
     args = parser.parse_args()
     DATA_PATH = args.data_path
     MODEL_PATH = args.model_path
     output_dir = args.output_path
     n_sample = args.n_sample
-    use_rgb = args.use_rgb
+    rgb_only = args.rgb_only
 
     dt_now = datetime.now().strftime("%Y%m%d_%H%M%S")
     DATA_POS_PATH = os.path.join(DATA_PATH, "positive")
@@ -359,6 +301,7 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_POS_PATH, exist_ok=True)
     os.makedirs(OUTPUT_NEG_PATH, exist_ok=True)
     os.makedirs(OUTPUT_ANALYSE_PATH, exist_ok=True)
+    logging.info(f"Completed create output directory: {OUTPUT_PATH}")
 
     # Create datamodule
     means = []
@@ -371,7 +314,7 @@ if __name__ == "__main__":
             elif line.startswith("Stds:"):
                 numbers = line.strip().split('[')[1].split(']')[0].split()
                 stds = [float(n) for n in numbers]
-    if use_rgb:
+    if rgb_only:
         means = means[0:3]
         stds = stds[0:3]
         logging.info("Use only RGB bands")
@@ -379,8 +322,8 @@ if __name__ == "__main__":
         logging.info("Use MSI")
     logging.info(f"Means: {means}")
     logging.info(f"Stds: {stds}")
-    datamodule_pos, predict_set_pos = create_datamodule(DATA_POS_PATH, batchsize=8, means=means, stds=stds, use_rgb=use_rgb)
-    datamodule_neg, predict_set_neg = create_datamodule(DATA_NEG_PATH, batchsize=8, means=means, stds=stds, use_rgb=use_rgb)
+    datamodule_pos, predict_set_pos = create_datamodule(DATA_POS_PATH, batchsize=8, means=means, stds=stds, rgb_only=rgb_only)
+    datamodule_neg, predict_set_neg = create_datamodule(DATA_NEG_PATH, batchsize=8, means=means, stds=stds, rgb_only=rgb_only)
     logging.info(f"No. image of positive group: {len(predict_set_pos)}")
     logging.info(f"No. image of negative group: {len(predict_set_neg)}")
 
@@ -438,16 +381,3 @@ if __name__ == "__main__":
     prediction(model=best_model, datamodule=datamodule_neg, output_path=OUTPUT_NEG_PATH, 
             visualized_sample=samples["negative"], desc="Predicting negative")
     logging.info("Completed prediction.")
-
-    # Analysis results
-    total_pixel = 512*512
-    res_pos = pd.read_csv(os.path.join(OUTPUT_POS_PATH, "results.csv"))
-    res_pos.drop(columns=["shadow", "obscured", "burned_shadow", "burned_obscured"], inplace=True)
-    res_neg = pd.read_csv(os.path.join(OUTPUT_NEG_PATH, "results.csv"))
-    res_neg.drop(columns=["shadow", "obscured", "burned_shadow", "burned_obscured"], inplace=True)
-    res_pos, res_neg = analysis(res_pos, res_neg, total_pixel, OUTPUT_ANALYSE_PATH)
-    summary_pos = sum_res(res_pos)
-    summary_neg = sum_res(res_neg)
-    summary_pos.to_csv(os.path.join(OUTPUT_ANALYSE_PATH, "summary_pos.csv"), index=False)
-    summary_neg.to_csv(os.path.join(OUTPUT_ANALYSE_PATH, "summary_neg.csv"), index=False)
-    logging.info("Completed all result analysis.")
