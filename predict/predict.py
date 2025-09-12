@@ -168,139 +168,61 @@ def plot_msi(sample: dict[str, Tensor], suptitle: str | None = None):
     
     return fig
 
-def calculate_area(sample: dict[str, Tensor]):
-    mask = sample["mask"].numpy()
-    prediction = sample["prediction"]
-    filepath = sample["filename"]
-    filename = os.path.basename(filepath)
-    
-    # Cloud, shadow mask
-    is_cloud = (mask==1)
-    is_shadow = (mask==-1)
-    is_obscured = is_cloud | is_shadow
-    is_clear = (mask==0)
-    
-    # Prediction mask
-    is_burned = (prediction==1)
-    is_unburned = (prediction==0)
-    is_burned_cloud = is_burned & is_cloud
-    is_burned_shadow = is_burned & is_shadow
-    is_burned_obscured = is_burned & is_obscured
-    is_burned_clear = is_burned & is_clear
-    
-    # Sum area
-    area_cloud = np.sum(is_cloud)
-    area_shadow = np.sum(is_shadow)
-    area_obscured = np.sum(is_obscured)
-    area_clear = np.sum(is_clear)
-    area_burned = np.sum(is_burned)
-    area_unburned = np.sum(is_unburned)
-    area_burned_cloud = np.sum(is_burned_cloud)
-    area_burned_shadow = np.sum(is_burned_shadow)
-    area_burned_obscured  = np.sum(is_burned_obscured)
-    area_burned_clear = np.sum(is_burned_clear)
-
-    return {
-        "filename": filename,
-        "cloud": area_cloud, 
-        "shadow": area_shadow,
-        "obscured": area_obscured,
-        "clear": area_clear,
-        "burned": area_burned,
-        "unburned": area_unburned,
-        "burned_cloud": area_burned_cloud,
-        "burned_shadow": area_burned_shadow,
-        "burned_obscured": area_burned_obscured,
-        "burned_clear": area_burned_clear
-    }
-
-def prediction(model, datamodule, output_path, visualized_sample, desc):
+def prediction(model, datamodule, output_path, visual_tiles):
     predict_loader = datamodule.predict_dataloader()
     plot_dir = os.path.join(output_path, "example_plot")
     pred_dir = os.path.join(output_path, "pred_masks")
-    obscured_dir = os.path.join(output_path, "obscured_masks")
-    csv_path = os.path.join(output_path, "results.csv")
     os.makedirs(plot_dir, exist_ok=True)
     os.makedirs(pred_dir, exist_ok=True)
-    os.makedirs(obscured_dir, exist_ok=True)
-    fieldnames = ["filename", "cloud", "shadow", "obscured", "clear", "burned", "unburned", 
-                "burned_cloud", "burned_shadow", "burned_obscured", "burned_clear"]
-    
-    with open(csv_path, "w", newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
 
-        best_model.eval()
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(predict_loader, desc=desc)):
-                images = batch["image"].to(model.device)
-                outputs = model(images)
-                preds = torch.argmax(outputs.output, dim=1).cpu().numpy()
-                batch_size = images.shape[0]
-                
-                for i in range(batch_size):
-                    sample = {key: batch[key][i] for key in batch}
-                    sample["prediction"] = preds[i]
-                    sample["image"] = sample["image"].cpu()
-                    casename = os.path.splitext(os.path.basename(sample["filename"]))[0]
-                    np.save(os.path.join(pred_dir, f"{casename}.npy"), sample["prediction"]) # save prediction mask
-                    np.save(os.path.join(obscured_dir, f"{casename}.npy"), sample["mask"]) # save obscured mask
-                    res = calculate_area(sample=sample)
-                    writer.writerow(res)
+    best_model.eval()
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(tqdm(predict_loader, desc="Predicting")):
+            images = batch["image"].to(model.device)
+            outputs = model(images)
+            preds = torch.argmax(outputs.output, dim=1).cpu().numpy()
+            batch_size = images.shape[0]
+            
+            for i in range(batch_size):
+                sample = {key: batch[key][i] for key in batch}
+                sample["prediction"] = preds[i]
+                sample["image"] = sample["image"].cpu()
+                casename = os.path.splitext(os.path.basename(sample["filename"]))[0]
+                np.save(os.path.join(pred_dir, f"{casename}.npy"), sample["prediction"]) # save prediction mask
 
-                    # save plot from visualized_samples
-                    match_row = visualized_sample[visualized_sample==casename]
-                    if not match_row.empty:
-                        fig = plot_msi(sample=sample)
-                        fig.savefig(os.path.join(plot_dir, f"{match_row.index[0]}_{casename}.png"))
-                        del fig  
-    
-                    del sample
-    
-                del batch, images, outputs, preds
-                gc.collect()
-                torch.cuda.empty_cache()
+                # save plot from visual_tiles
+                casename_split = casename.split("_")
+                tile_id = f"{casename_split[0]}_{casename_split[1]}_{casename_split[2]}"
+                if visual_tiles["tile"].str.contains(tile_id).any():
+                    fig = plot_msi(sample=sample)
+                    fig.savefig(os.path.join(plot_dir, f"{casename}.png"))
+                    del fig  
 
-def sum_res(df):
-    cols = ["ratio_burned", "ratio_cloud", "ratio_burned_on_clear", "ratio_burned_on_cloud"]
-    summary_df = pd.DataFrame({
-        "mean": df[cols].mean(),
-        "median": df[cols].median(),
-        "min": df[cols].min(),
-        "max": df[cols].max(),
-        "std": df[cols].std()
-    })
-    summary_df = summary_df.reset_index().rename(columns={"index": "measures"})
-    return summary_df
+                del sample
+
+            del batch, images, outputs, preds
+            gc.collect()
+            torch.cuda.empty_cache()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arguments for HLS Thai prediction")
     parser.add_argument("--data_path", type=str, help="Data directory for prediction")
     parser.add_argument("--model_path", type=str, help="Model directory containing config and checkpoint")
     parser.add_argument("--output_path", type=str, help="Output directory")
-    parser.add_argument("--n_sample", type=int, default=10, help="Number of pairs for visualization output")
     parser.add_argument("--rgb_only", action="store_true", help="Flag to use only RGB")
 
     args = parser.parse_args()
     DATA_PATH = args.data_path
     MODEL_PATH = args.model_path
     output_dir = args.output_path
-    n_sample = args.n_sample
     rgb_only = args.rgb_only
 
     dt_now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    DATA_POS_PATH = os.path.join(DATA_PATH, "positive")
-    DATA_NEG_PATH = os.path.join(DATA_PATH, "negative")
     OUTPUT_PATH = os.path.join(output_dir, f"{dt_now}")
-    OUTPUT_POS_PATH = os.path.join(OUTPUT_PATH, "positive")
-    OUTPUT_NEG_PATH = os.path.join(OUTPUT_PATH, "negative")
-    OUTPUT_ANALYSE_PATH = os.path.join(OUTPUT_PATH, "analysis")
     MODEL_CONFIG_PATH = os.path.join(MODEL_PATH, "log/lightning_logs/version_0/hparams.yaml")
     MODEL_CKPT_PATH = glob(os.path.join(MODEL_PATH, "checkpoint/best-epoch=*.ckpt"))[0]
     os.makedirs(OUTPUT_PATH, exist_ok=True)
-    os.makedirs(OUTPUT_POS_PATH, exist_ok=True)
-    os.makedirs(OUTPUT_NEG_PATH, exist_ok=True)
-    os.makedirs(OUTPUT_ANALYSE_PATH, exist_ok=True)
     logging.info(f"Completed create output directory: {OUTPUT_PATH}")
 
     # Create datamodule
@@ -322,10 +244,12 @@ if __name__ == "__main__":
         logging.info("Use MSI")
     logging.info(f"Means: {means}")
     logging.info(f"Stds: {stds}")
-    datamodule_pos, predict_set_pos = create_datamodule(DATA_POS_PATH, batchsize=8, means=means, stds=stds, rgb_only=rgb_only)
-    datamodule_neg, predict_set_neg = create_datamodule(DATA_NEG_PATH, batchsize=8, means=means, stds=stds, rgb_only=rgb_only)
-    logging.info(f"No. image of positive group: {len(predict_set_pos)}")
-    logging.info(f"No. image of negative group: {len(predict_set_neg)}")
+    datamodule, predict_set = create_datamodule(os.path.join(DATA_PATH, "data"), 
+                                                batchsize=8, 
+                                                means=means, 
+                                                stds=stds, 
+                                                rgb_only=rgb_only)
+    logging.info(f"No. images: {len(predict_set)}")
 
     # Load model and task
     with open(MODEL_CONFIG_PATH, "r") as file:
@@ -366,18 +290,8 @@ if __name__ == "__main__":
     )
     logging.info("Completed load model.")
 
-    # Sample pairs for visualization to compare
-    index = pd.read_csv(os.path.join(DATA_PATH, "index.csv"))
-    samples = index.sample(n_sample)
-    samples["positive"] = samples["positive"].str.rsplit(".", n=1).str[0]
-    samples["negative"] = samples["negative"].str.rsplit(".", n=1).str[0]
-    logging.info(f"Sample pairs for visualization: {n_sample}")
-    logging.info("Example:")
-    logging.info(samples.head())
-
     # Perform prediction
-    prediction(model=best_model, datamodule=datamodule_pos, output_path=OUTPUT_POS_PATH, 
-            visualized_sample=samples["positive"], desc="Predicting positve")
-    prediction(model=best_model, datamodule=datamodule_neg, output_path=OUTPUT_NEG_PATH, 
-            visualized_sample=samples["negative"], desc="Predicting negative")
+    visual_tiles = pd.read_csv(os.path.join(DATA_PATH, "visual_tiles.csv"))
+    logging.info(f"Visualize {len(visual_tiles)} tiles id, so total {len(visual_tiles)*22} images")
+    prediction(best_model, datamodule, OUTPUT_PATH, visual_tiles)
     logging.info("Completed prediction.")

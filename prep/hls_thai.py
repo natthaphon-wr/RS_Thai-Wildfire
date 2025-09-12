@@ -1,12 +1,12 @@
 import argparse
 import logging
+import warnings
 import os
+import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import warnings
 from tqdm import tqdm
-from glob import glob
 
 import rasterio
 from rasterio.windows import Window
@@ -104,29 +104,17 @@ def create_datamodule(data_path):
     datamodule_predict = datamodule.predict_dataset
     return datamodule_predict
 
-def filter_cloud(datamodule):
+def filter_cloud(datamodule, threshold):
     count = 0
     for i in tqdm(range(len(datamodule)), desc="Filter cloud ratio"):
         cloud_ratio = ((datamodule[i]["mask"] == 1)).sum().item()/(512*512)
-        if cloud_ratio > 0.1:
+        if cloud_ratio > threshold:
             count += 1
             os.remove(datamodule[i]["filename"])
     return count
 
-def delete_surplus(file_list, new_index, data_path, desc):
-    pos_del = set(file_list) - set(new_index)
-    for filename in tqdm(pos_del, desc=desc):
-        filepath = os.path.join(data_path, filename)
-        try:
-            os.remove(filepath)
-        except FileNotFoundError:
-            print(f"Not found: {filepath}")
-        except Exception as e:
-            print(f"Error deleting {filepath}: {e}")
-    return pos_del
-
 def compute_mean_std_hls(folder_path, desc):
-    image_paths = glob(os.path.join(folder_path, "*.tif"))
+    image_paths = glob.glob(os.path.join(folder_path, "*.tif"))
 
     # Find percentiles
     band_pixels = [[] for _ in range(6)]
@@ -168,33 +156,23 @@ def compute_mean_std_hls(folder_path, desc):
     std = np.sqrt((sum_sq / count) - np.square(mean))
     return mean, std
 
-def combine_mean_std(mean_1, std_1, n_1, mean_2, std_2, n_2):
-    combined_n = n_1 + n_2
-    mean = (n_1 * mean_1 + n_2 * mean_2) / combined_n
-    std = np.sqrt(
-        (n_1 * (std_1**2 + (mean_1 - mean)**2) + n_2 * (std_2**2 + (mean_2 - mean)**2)) / combined_n
-    )
-    return mean, std
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arguments for preparation of HLS Thai data")
     parser.add_argument("--raw_data_path", type=str, help="Raw data directory")
     parser.add_argument("--prep_data_path", type=str, help="Preprocess data directory")
+    parser.add_argument("--img_size", type=int, help="Preprocess image size")
+    parser.add_argument("--cloud_threshold", type=float, help="Cloud threshold for filter images")
 
     args = parser.parse_args()
     DATA_PATH_RAW = args.raw_data_path
     DATA_PATH_PREPROCESS = args.prep_data_path
+    IMG_SIZE = args.img_size
+    CLOUD_THRESHOLD = args.cloud_threshold
+    os.makedirs(DATA_PATH_PREPROCESS, exist_ok=True)
+    os.makedirs(os.path.join(DATA_PATH_PREPROCESS, "data"), exist_ok=True)
 
-    # Define and create directory
-    DATA_PATH_RAW_POSITVE = os.path.join(DATA_PATH_RAW, "positive")
-    DATA_PATH_RAW_NEGATIVE = os.path.join(DATA_PATH_RAW, "negative")
-    DATA_PATH_PREPROCESS_POSITIVE = os.path.join(DATA_PATH_PREPROCESS, "positive")
-    DATA_PATH_PREPROCESS_NEGATIVE = os.path.join(DATA_PATH_PREPROCESS, "negative")
-
-    # Read raw index
-    index_raw = pd.read_csv(os.path.join(DATA_PATH_RAW, "index.csv"))
-    logging.info(f"Index have {len(index_raw)} pairs")
+    # Read forest tile csv
     forest_tiles = pd.read_csv(os.path.join(DATA_PATH_RAW, "forest_tiles.csv"))
     forest_tiles["Row_str"] = forest_tiles["Row"].apply(lambda x: f"{x:04d}")
     forest_tiles["Column_str"] = forest_tiles["Column"].apply(lambda x: f"{x:04d}")
@@ -205,80 +183,42 @@ if __name__ == "__main__":
     logging.info(forest_tiles.head())
 
     # Split images
-    img_size = (512, 512)
-    pos_file_list = os.listdir(DATA_PATH_RAW_POSITVE)
-    neg_file_list = os.listdir(DATA_PATH_RAW_NEGATIVE)
-    pos_count = 0
-    for fname in tqdm(pos_file_list, desc="Split positive"):
-        file_path = os.path.join(DATA_PATH_RAW_POSITVE, fname)
-        pos_count += split_img(file_path, DATA_PATH_PREPROCESS_POSITIVE, img_size, forest_tiles["small_tile"])
-    logging.info(f"Completed split positve set from {len(pos_file_list)} to {pos_count}")
-    neg_count = 0
-    for fname in tqdm(neg_file_list, desc="Split negative"):
-        file_path = os.path.join(DATA_PATH_RAW_NEGATIVE, fname)
-        neg_count += split_img(file_path, DATA_PATH_PREPROCESS_NEGATIVE, img_size, forest_tiles["small_tile"])
-    logging.info(f"Completed split negative set from {len(neg_file_list)} to {neg_count}")
+    img_size = (IMG_SIZE, IMG_SIZE)
+    files_list = glob.glob(os.path.join(DATA_PATH_RAW, "*.tif"))
+    count = 0
+    for file_path in tqdm(files_list, desc="Split raw images"):
+        count += split_img(file_path, os.path.join(DATA_PATH_PREPROCESS, "data"), img_size, forest_tiles["small_tile"])
+    logging.info(f"Completed split images from {len(files_list)} to {count}")
     
     # Filter out cloud
-    datamodule_pos = create_datamodule(DATA_PATH_PREPROCESS_POSITIVE)
-    datamodule_neg = create_datamodule(DATA_PATH_PREPROCESS_NEGATIVE)
-    logging.info(f"Length of positive datamodule: {len(datamodule_pos)}")
-    logging.info(f"Length of negative datamodule: {len(datamodule_neg)}")
-    count_del_pos = filter_cloud(datamodule_pos)
-    count_del_neg = filter_cloud(datamodule_neg)
-    logging.info(f"Remove positive {count_del_pos} images for filter cloud")
-    logging.info(f"Remove negative {count_del_neg} images for filter cloud")
-
-    # Create preprocess index
-    width, height = (3660, 3660)
-    new_width, new_height = (512,  512)
-    suffix_list = []
-    for i in range(0, width-new_width, new_width):
-        for j in range(0, height-new_height, new_height):
-            row_str = str(j).zfill(4)
-            col_str = str(i).zfill(4)
-            suffix_list.append(f"_{row_str}_{col_str}")
-    
-    index_preprocess = pd.DataFrame(
-        [(burn_id.split("_")[0] + suffix + "_" + burn_id.split("_")[1] + ".tif", 
-            unburn_id.split("_")[0] + suffix + "_" + unburn_id.split("_")[1] + ".tif")
-        for burn_id, unburn_id in zip(index_raw['Burned_ID'], index_raw['Unburned_ID'])
-        for suffix in suffix_list],
-        columns=['positive', 'negative']
-    )
-    logging.info("Example index for preped dataset:")
-    logging.info(index_preprocess.head())
-
-    pos_files = glob(f"{DATA_PATH_PREPROCESS_POSITIVE}/*.tif")
-    pos_files = [os.path.basename(path) for path in pos_files]
-    neg_files = glob(f"{DATA_PATH_PREPROCESS_NEGATIVE}/*.tif")
-    neg_files = [os.path.basename(path) for path in neg_files]
-    logging.info(f"Total splited positive images: {len(pos_files)}")
-    logging.info(f"Total splited negative images: {len(neg_files)}")
-    idx_in_pos = index_preprocess[index_preprocess["positive"].isin(pos_files)].index
-    idx_in_neg = index_preprocess[index_preprocess["negative"].isin(neg_files)].index
-    idx_intesection = set(idx_in_pos) & set(idx_in_neg)
-    logging.info(f"There are {len(idx_intesection)} pairs that are intersection.")
-    index_preprocess_filter = index_preprocess[index_preprocess.index.isin(idx_intesection)]
-    index_preprocess_filter = index_preprocess_filter.drop_duplicates(subset="negative", keep="first")
-    index_preprocess_filter.to_csv(os.path.join(DATA_PATH_PREPROCESS, "index.csv"), index=False)
-    logging.info(f"There are {len(index_preprocess_filter)} pairs after drop duplicate.")
-    logging.info("Completed create preprocess index.")
-
-    # Delete surplus images
-    pos_del = delete_surplus(file_list=pos_files, new_index=index_preprocess_filter["positive"], 
-                            data_path=DATA_PATH_PREPROCESS_POSITIVE, desc="Delete positve surplus")
-    neg_del = delete_surplus(file_list=neg_files, new_index=index_preprocess_filter["negative"], 
-                            data_path=DATA_PATH_PREPROCESS_NEGATIVE, desc="Delete negative surplus")
+    datamodule = create_datamodule(os.path.join(DATA_PATH_PREPROCESS, "data"))
+    logging.info(f"Length of datamodule: {len(datamodule)}")
+    count_del = filter_cloud(datamodule, CLOUD_THRESHOLD)
+    logging.info(f"Remove {count_del} images from cloud filter")
 
     # Find means and stds
-    mean_pos, std_pos = compute_mean_std_hls(folder_path=DATA_PATH_PREPROCESS_POSITIVE, desc="Find stats for positive")
-    mean_neg, std_neg = compute_mean_std_hls(folder_path=DATA_PATH_PREPROCESS_NEGATIVE, desc="Find stats for negative")
-    mean, std = combine_mean_std(mean_1=mean_pos, std_1=std_pos, n_1=len(glob(os.path.join(DATA_PATH_PREPROCESS_POSITIVE, "*.tif"))),
-                                 mean_2=mean_neg, std_2=std_neg, n_2=len(glob(os.path.join(DATA_PATH_PREPROCESS_NEGATIVE, "*.tif"))))
+    mean, std = compute_mean_std_hls(folder_path=os.path.join(DATA_PATH_PREPROCESS, "data"), desc="Find means/stds")
     lines = [f"Means: {mean}", f"Stds: {std}"]
     with open(os.path.join(DATA_PATH_PREPROCESS, "stats.txt"), "w", encoding="utf-8") as f:
         for line in lines:
             f.write(line + "\n")
     logging.info(f"Means: {mean}")
     logging.info(f"Stds: {std}")
+
+    # Get tiles id that have all periods
+    file_list = glob.glob(os.path.join(DATA_PATH_PREPROCESS, "data", "*.tif"))
+    filename_list = [os.path.basename(path) for path in file_list]
+    rows = []
+    for fname in filename_list:
+        fname_split = fname.split("_")
+        tile = f"{fname_split[0]}_{fname_split[1]}_{fname_split[2]}"
+        year = fname_split[3][0:4]
+        month_date = fname_split[3][4:8]
+        rows.append({"tile":tile, "year":year, "month_date": month_date})
+    df = pd.DataFrame(rows)
+    df_filter = df.groupby("tile")["month_date"].count().reset_index(name="row_count")
+    df_filter = df_filter[df_filter["row_count"]==22]
+    selected_tile_id = df_filter["tile"]
+    selected_tile_id.to_csv(os.path.join(DATA_PATH_PREPROCESS, "visual_tiles.csv"), index=False)
+    logging.info(f"There are {len(df_filter)} tiles id that have all periods")
+    logging.info("Save it to csv")
