@@ -168,7 +168,7 @@ def plot_msi(sample: dict[str, Tensor], suptitle: str | None = None):
     
     return fig
 
-def prediction(model, datamodule, output_path, visual_tiles):
+def prediction(model, datamodule, output_path):
     predict_loader = datamodule.predict_dataloader()
     plot_dir = os.path.join(output_path, "example_plot")
     pred_dir = os.path.join(output_path, "pred_masks")
@@ -190,13 +190,11 @@ def prediction(model, datamodule, output_path, visual_tiles):
                 casename = os.path.splitext(os.path.basename(sample["filename"]))[0]
                 np.save(os.path.join(pred_dir, f"{casename}.npy"), sample["prediction"]) # save prediction mask
 
-                # save plot from visual_tiles
+                # save plot
                 casename_split = casename.split("_")
-                tile_id = f"{casename_split[0]}_{casename_split[1]}_{casename_split[2]}"
-                if visual_tiles["tile"].str.contains(tile_id).any():
-                    fig = plot_msi(sample=sample)
-                    fig.savefig(os.path.join(plot_dir, f"{casename}.png"))
-                    del fig  
+                fig = plot_msi(sample=sample)
+                fig.savefig(os.path.join(plot_dir, f"{casename}.png"))
+                del fig  
 
                 del sample
 
@@ -291,7 +289,5 @@ if __name__ == "__main__":
     logging.info("Completed load model.")
 
     # Perform prediction
-    visual_tiles = pd.read_csv(os.path.join(DATA_PATH, "visual_tiles.csv"))
-    logging.info(f"Visualize {len(visual_tiles)} tiles id, so total {len(visual_tiles)*22} images")
-    prediction(best_model, datamodule, OUTPUT_PATH, visual_tiles)
+    prediction(best_model, datamodule, OUTPUT_PATH)
     logging.info("Completed prediction.")
