@@ -39,6 +39,11 @@ data:
   - 0.08708738838140137
   - 0.07241979477437814
   train_transform:
+  # - class_path: FDA
+  #   init_args:
+  #     reference_path: "/data/preprocess/old_version/hls_thai/reference"
+  #     beta_limit: [0.001,0.003]
+  #     p: 0.5
   - class_path: D4
   - class_path: ToTensorV2
   test_transform:
